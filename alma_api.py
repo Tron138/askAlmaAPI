@@ -1,7 +1,8 @@
 import asyncio
 import time
+import json
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 from playwright.async_api import async_playwright
 
@@ -15,11 +16,8 @@ class AlmaBrowser:
         self.is_ready = False
 
     async def start(self):
-        """Startet den Browser und navigiert zur Chat-Seite."""
         print("[Browser] Starte Playwright...")
         self.playwright = await async_playwright().start()
-        
-        # Du kannst headless auf True setzen, wenn du das Fenster später nicht mehr sehen willst!
         self.browser_context = await self.playwright.chromium.launch_persistent_context(
             user_data_dir=USER_DATA_DIR,
             headless=False, 
@@ -35,7 +33,6 @@ class AlmaBrowser:
         print("[Browser] Bereit für Eingaben von Open Interpreter!")
 
     async def send_message(self, text: str) -> str:
-        """Sendet eine Nachricht und wartet dynamisch auf die gestreamte Antwort."""
         if not self.is_ready:
             return "Fehler: Browser ist noch nicht bereit."
 
@@ -45,14 +42,11 @@ class AlmaBrowser:
             eingabefeld = self.page.locator("textarea").first
             antwort_locator = self.page.locator(".markdown-body")
             
-            # 1. Zähle vorherige Antworten
             anzahl_vorher = await antwort_locator.count()
             
-            # 2. Text eintragen und senden
             await eingabefeld.fill(text)
             await self.page.keyboard.press("Enter")
             
-            # 3. Warten, bis KI anfängt zu tippen
             neue_antwort_index = anzahl_vorher
             start_wait = time.time()
             
@@ -61,20 +55,18 @@ class AlmaBrowser:
                     return "Fehler: KI hat nach 30 Sekunden nicht geantwortet."
                 await asyncio.sleep(0.5)
                 
-            # 4. Stream überwachen (Polling)
             das_neue_element = antwort_locator.nth(neue_antwort_index)
             letzter_text = ""
             gleicher_text_zaehler = 0
             
             start_stream = time.time()
-            max_total_wait = 180 # Max 3 Minuten
+            max_total_wait = 180 
             
             while time.time() - start_stream < max_total_wait:
                 aktueller_text = await das_neue_element.inner_text()
                 
                 if aktueller_text == letzter_text and aktueller_text.strip() != "":
                     gleicher_text_zaehler += 1
-                    # Wenn Text 4x gleich bleibt (ca. 2 Sekunden), ist die KI fertig
                     if gleicher_text_zaehler >= 4:
                         break
                 else:
@@ -109,9 +101,6 @@ async def shutdown_event():
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    """
-    Der Drop-In-Ersatz für OpenAI.
-    """
     try:
         data = await request.json()
     except Exception:
@@ -121,7 +110,10 @@ async def chat_completions(request: Request):
     if not messages:
         return JSONResponse(status_code=400, content={"error": {"message": "Missing messages"}})
 
-    # Open Interpreter sendet eine Historie. Wir fassen sie für Ask Alma als Text zusammen:
+    # Open Interpreter sendet einen 'stream' Parameter
+    is_stream = data.get("stream", False)
+
+    # Prompt zusammenbauen
     full_prompt = ""
     for m in messages:
         role = m.get("role", "user").upper()
@@ -131,7 +123,33 @@ async def chat_completions(request: Request):
     # Browser die Arbeit machen lassen
     antwort_text = await alma_browser.send_message(full_prompt)
 
-    # Die Antwort exakt nach der Spezifikation verpacken
+    # --- FAKE STREAMING FÜR OPEN INTERPRETER ---
+    if is_stream:
+        async def stream_generator():
+            # 1. Wir senden den gesamten Text als einen großen "Stream-Chunk"
+            chunk = {
+                "id": f"chatcmpl-{int(time.time())}",
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": data.get("model", "ask-alma-local"),
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": antwort_text}, "finish_reason": None}]
+            }
+            yield f"data: {json.dumps(chunk)}\n\n"
+            
+            # 2. Wir senden das Signal, dass der Stream beendet ist
+            stop_chunk = {
+                "id": f"chatcmpl-{int(time.time())}",
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": data.get("model", "ask-alma-local"),
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+            }
+            yield f"data: {json.dumps(stop_chunk)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(stream_generator(), media_type="text/event-stream")
+
+    # --- STANDARD ANTWORT (falls ohne Stream angefragt) ---
     response_data = {
         "id": f"chatcmpl-{int(time.time())}",
         "object": "chat.completion",
@@ -148,7 +166,6 @@ async def chat_completions(request: Request):
             }
         ]
     }
-
     return JSONResponse(content=response_data)
 
 if __name__ == "__main__":
