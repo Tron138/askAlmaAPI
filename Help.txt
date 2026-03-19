@@ -1,0 +1,15 @@
+3. So richtest du es auf dem neuen PC ein
+Wenn du das Projekt auf dem neuen PC über Git heruntergeladen hast (z. B. mit git clone), musst du nur noch drei Schritte im Terminal auf dem neuen PC ausführen:
+
+Schritt 1: Abhängigkeiten installieren
+
+Bash
+pip install -r requirements.txt
+Schritt 2: Playwright Browser herunterladen
+Da Playwright auf dem neuen PC noch keine Browser-Dateien hat (genau wie bei unserem ersten Fehler ganz am Anfang), musst du Chromium dort einmalig laden:
+
+Bash
+playwright install chromium
+Schritt 3: Einmaliger Moodle-Login
+Da wir den browser_session-Ordner aus Sicherheitsgründen nicht über Git kopiert haben, wird er auf dem neuen PC beim ersten Start neu erstellt.
+Das heißt: Wenn du alma_api.py auf dem neuen PC das allererste Mal startest, musst du dich im aufpoppenden Browser einmal kurz händisch bei Moodle einloggen. Danach läuft wieder alles vollautomatisch wie gewohnt.

@@ -1,0 +1,10 @@
+# Ignoriere den Browser-Session-Ordner (Enthält deine Moodle-Cookies!)
+browser_session/
+
+# Ignoriere unsere Test-Dumps
+alma_html_dump.txt
+alma_chat_dump.html
+
+# Python Cache-Dateien
+__pycache__/
+*.pyc
